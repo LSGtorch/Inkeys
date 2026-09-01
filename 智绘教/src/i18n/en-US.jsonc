@@ -296,7 +296,12 @@
       {
         "N": "Experimental",
         "HideCursor": "Hide touch cursor while drawing (BETA)",
-        "HideCursorE": "Hides white touch dot on canvas. Shows mouse/pen cursor again when detected."
+        "HideCursorE": "Hides white touch dot on canvas. Shows mouse/pen cursor again when detected.",
+
+        "PalmEraser": "Palm touch switches to eraser (BETA)",
+        "PalmEraserE": "When the shorter side of a touch contact exceeds the threshold (e.g. a palm resting on an all-in-one screen), it automatically erases in eraser mode. Requires the touch driver to report contact size; has no effect on unsupported devices.",
+        "PalmEraserThreshold": "Palm detection threshold (px)",
+        "PalmEraserSizeFollow": "Eraser size follows palm contact area"
       }
     },
     "Performance":

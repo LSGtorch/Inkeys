@@ -818,6 +818,9 @@ void SettingMain()
 		bool SmoothWriting = setlist.smoothWriting;
 		int EraserMode = setlist.eraserSetting.eraserMode;
 		bool HideTouchPointer = setlist.hideTouchPointer;
+		bool PalmEraser = setlist.palmEraserSetting.enable;
+		int PalmEraserThreshold = setlist.palmEraserSetting.threshold;
+		bool PalmEraserSizeFollow = setlist.palmEraserSetting.sizeFollowPalm;
 
 		int PreparationQuantity = setlist.performanceSetting.preparationQuantity;
 		bool SuperDraw = setlist.performanceSetting.superDraw;
@@ -4509,7 +4512,7 @@ void SettingMain()
 						PushStyleVarNum++, ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 						PushStyleVarNum++, ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
 						PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(255, 255, 255, 0));
-						ImGui::BeginChild("绘制#5", { 750.0f * settingGlobalScale,130.0f * settingGlobalScale }, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+						ImGui::BeginChild("绘制#5", { 750.0f * settingGlobalScale,310.0f * settingGlobalScale }, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 						{
 							ImGui::SetCursorPos({ 0.0f * settingGlobalScale, 0.0f * settingGlobalScale });
 							ImFontMain->Scale = 0.6f, PushFontNum++, ImGui::PushFont(ImFontMain);
@@ -4571,6 +4574,93 @@ void SettingMain()
 									ImGui::TextWrapped(IA("SettingsUI/Draw/Tentative/HideCursorE").c_str());
 								}
 
+								{
+									if (PushStyleColorNum >= 0) ImGui::PopStyleColor(PushStyleColorNum), PushStyleColorNum = 0;
+									if (PushStyleVarNum >= 0) ImGui::PopStyleVar(PushStyleVarNum), PushStyleVarNum = 0;
+									while (PushFontNum) PushFontNum--, ImGui::PopFont();
+								}
+								ImGui::EndChild();
+							}
+
+							{
+								if (PushStyleColorNum >= 0) ImGui::PopStyleColor(PushStyleColorNum), PushStyleColorNum = 0;
+								if (PushStyleVarNum >= 0) ImGui::PopStyleVar(PushStyleVarNum), PushStyleVarNum = 0;
+								while (PushFontNum) PushFontNum--, ImGui::PopFont();
+							}
+							ImGui::EndChild();
+						}
+
+						{
+							ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.0f * settingGlobalScale);
+							PushStyleVarNum++, ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+							PushStyleVarNum++, ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
+							PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(251, 251, 251, 255));
+							ImGui::BeginChild("手掌触碰自动转橡皮", { 750.0f * settingGlobalScale,150.0f * settingGlobalScale }, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+							float cursosPosY = 0;
+							{
+								ImGui::SetCursorPos({ 20.0f * settingGlobalScale, cursosPosY + 22.0f * settingGlobalScale });
+								ImFontMain->Scale = 0.6f, PushFontNum++, ImGui::PushFont(ImFontMain);
+								PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 0, 0, 255));
+								ImGui::TextUnformatted(IA("SettingsUI/Draw/Tentative/PalmEraser").c_str());
+							}
+							{
+								ImGui::SetCursorPos({ 690.0f * settingGlobalScale, cursosPosY + 20.0f * settingGlobalScale });
+								PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 6));
+								PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 15));
+								PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 95, 184, 255));
+								PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0, 95, 184, 230));
+								if (!PalmEraser)
+								{
+									PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 0, 0, 155));
+									PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_BorderShadow, IM_COL32(0, 0, 0, 155));
+								}
+								else
+								{
+									PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
+									PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_BorderShadow, IM_COL32(0, 95, 184, 255));
+								}
+								ImGui::Toggle("##手掌触碰自动转橡皮", &PalmEraser, config);
+
+								if (setlist.palmEraserSetting.enable != PalmEraser)
+								{
+									setlist.palmEraserSetting.enable = PalmEraser;
+									WriteSetting();
+								}
+							}
+							{
+								ImGui::SetCursorPos({ 20.0f * settingGlobalScale, cursosPosY + 70.0f * settingGlobalScale });
+								ImFontMain->Scale = 0.5f, PushFontNum++, ImGui::PushFont(ImFontMain);
+								PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 0, 0, 255));
+								ImGui::TextUnformatted(IA("SettingsUI/Draw/Tentative/PalmEraserThreshold").c_str());
+								ImGui::SameLine();
+
+								ImGui::SetNextItemWidth(200.0f * settingGlobalScale);
+								ImGui::SliderInt("##手掌判定阈值", &PalmEraserThreshold, 20, 200);
+								if (setlist.palmEraserSetting.threshold != PalmEraserThreshold)
+								{
+									setlist.palmEraserSetting.threshold = PalmEraserThreshold;
+									WriteSetting();
+								}
+
+								ImGui::SameLine();
+								ImGui::Checkbox(IA("SettingsUI/Draw/Tentative/PalmEraserSizeFollow").c_str(), &PalmEraserSizeFollow);
+								if (setlist.palmEraserSetting.sizeFollowPalm != PalmEraserSizeFollow)
+								{
+									setlist.palmEraserSetting.sizeFollowPalm = PalmEraserSizeFollow;
+									WriteSetting();
+								}
+							}
+
+							cursosPosY = ImGui::GetCursorPosY();
+							{
+								ImGui::SetCursorPos({ 20.0f * settingGlobalScale, cursosPosY + 10.0f * settingGlobalScale });
+								ImGui::BeginChild("手掌触碰自动转橡皮-介绍", { 710.0f * settingGlobalScale,30.0f * settingGlobalScale }, false);
+								{
+									ImFontMain->Scale = 0.5f, PushFontNum++, ImGui::PushFont(ImFontMain);
+									PushStyleColorNum++, ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(120, 120, 120, 255));
+									ImGui::TextWrapped(IA("SettingsUI/Draw/Tentative/PalmEraserE").c_str());
+								}
 								{
 									if (PushStyleColorNum >= 0) ImGui::PopStyleColor(PushStyleColorNum), PushStyleColorNum = 0;
 									if (PushStyleVarNum >= 0) ImGui::PopStyleVar(PushStyleVarNum), PushStyleVarNum = 0;

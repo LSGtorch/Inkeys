@@ -175,6 +175,16 @@ bool ReadSetting()
 		if (setlistVal.isMember("HideTouchPointerBeta") && setlistVal["HideTouchPointerBeta"].isBool())
 			setlist.hideTouchPointer = setlistVal["HideTouchPointerBeta"].asBool();
 
+		if (setlistVal.isMember("PalmEraser") && setlistVal["PalmEraser"].isObject())
+		{
+			if (setlistVal["PalmEraser"].isMember("Enable") && setlistVal["PalmEraser"]["Enable"].isBool())
+				setlist.palmEraserSetting.enable = setlistVal["PalmEraser"]["Enable"].asBool();
+			if (setlistVal["PalmEraser"].isMember("Threshold") && setlistVal["PalmEraser"]["Threshold"].isInt())
+				setlist.palmEraserSetting.threshold = setlistVal["PalmEraser"]["Threshold"].asInt();
+			if (setlistVal["PalmEraser"].isMember("SizeFollowPalm") && setlistVal["PalmEraser"]["SizeFollowPalm"].isBool())
+				setlist.palmEraserSetting.sizeFollowPalm = setlistVal["PalmEraser"]["SizeFollowPalm"].asBool();
+		}
+
 		if (setlistVal.isMember("Save") && setlistVal["Save"].isObject())
 		{
 			if (setlistVal["Save"].isMember("Enable") && setlistVal["Save"]["Enable"].isBool())
@@ -189,6 +199,9 @@ bool ReadSetting()
 
 			if (setlistVal["Performance"].isMember("SuperDrawBeta2") && setlistVal["Performance"]["SuperDrawBeta2"].isBool())
 				setlist.performanceSetting.superDraw = setlistVal["Performance"]["SuperDrawBeta2"].asBool();
+
+			if (setlistVal["Performance"].isMember("DirtyRectOpt") && setlistVal["Performance"]["DirtyRectOpt"].isBool())
+				setlist.performanceSetting.dirtyRectOpt = setlistVal["Performance"]["DirtyRectOpt"].asBool();
 		}
 		if (setlistVal.isMember("Preset") && setlistVal["Preset"].isObject())
 		{
@@ -453,6 +466,12 @@ bool WriteSetting()
 		setlistVal["HideTouchPointerBeta"] = Json::Value(setlist.hideTouchPointer);
 
 		{
+			setlistVal["PalmEraser"]["Enable"] = Json::Value(setlist.palmEraserSetting.enable);
+			setlistVal["PalmEraser"]["Threshold"] = Json::Value(setlist.palmEraserSetting.threshold);
+			setlistVal["PalmEraser"]["SizeFollowPalm"] = Json::Value(setlist.palmEraserSetting.sizeFollowPalm);
+		}
+
+		{
 			setlistVal["Save"]["Enable"] = Json::Value(setlist.saveSetting.enable);
 			setlistVal["Save"]["SaveDays"] = Json::Value(setlist.saveSetting.saveDays);
 		}
@@ -460,6 +479,7 @@ bool WriteSetting()
 			setlistVal["Performance"]["PreparationQuantity"] = Json::Value(setlist.performanceSetting.preparationQuantity);
 
 			setlistVal["Performance"]["SuperDrawBeta2"] = Json::Value(setlist.performanceSetting.superDraw);
+			setlistVal["Performance"]["DirtyRectOpt"] = Json::Value(setlist.performanceSetting.dirtyRectOpt);
 		}
 		{
 			setlistVal["Preset"]["MemoryWidth"] = Json::Value(setlist.presetSetting.memoryWidth);

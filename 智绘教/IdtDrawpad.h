@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "IdtMain.h"
 
 extern bool main_open;
@@ -13,6 +13,9 @@ public:
 		canvas = nullptr;
 		endMode = 0;
 		alpha = 255;
+		dirty = false;
+		SetRectEmpty(&dirtyRect);
+		SetRectEmpty(&prevDirtyRect);
 	}
 	~StrokeImageClass()
 	{
@@ -28,6 +31,10 @@ public:
 	IMAGE* canvas;
 	int endMode; // 1 绘制到画布上 2 不绘制到画布上
 	int alpha;
+
+	bool dirty;		// 脏矩形优化：画布内容是否有更新
+	RECT dirtyRect;	// 脏矩形优化：内容区域（屏幕像素坐标）
+	RECT prevDirtyRect;	// 脏矩形优化：已合成内容区域的并集（用于移除/收缩时重绘）
 };
 extern StrokeImageClass strokeImage;
 

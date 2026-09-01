@@ -912,6 +912,12 @@ int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPWSTR
 					setlist.eraserSetting.eraserSize = static_cast<int>(60 * drawingScale);
 				}
 
+				{
+					setlist.palmEraserSetting.enable = true;
+					setlist.palmEraserSetting.threshold = 60;
+					setlist.palmEraserSetting.sizeFollowPalm = true;
+				}
+
 				setlist.hideTouchPointer = false;
 			}
 			// 保存
@@ -924,6 +930,7 @@ int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPWSTR
 				setlist.performanceSetting.preparationQuantity = 2;
 				setlist.performanceSetting.drawpadFps = 72;
 				setlist.performanceSetting.superDraw = false;
+				setlist.performanceSetting.dirtyRectOpt = true;
 			}
 			// 预设
 			{

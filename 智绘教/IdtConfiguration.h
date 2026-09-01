@@ -60,6 +60,13 @@ struct SetListStruct
 		int eraserSize;
 	}eraserSetting;
 
+	struct
+	{
+		IdtAtomic<bool> enable;			// 手掌触碰自动切换橡皮
+		IdtAtomic<int> threshold;		// 手掌判定阈值（接触面短边像素，100%缩放下）
+		IdtAtomic<bool> sizeFollowPalm;	// 橡皮尺寸跟随手掌接触面积
+	}palmEraserSetting;
+
 	IdtAtomic<bool> hideTouchPointer;
 #pragma endregion
 
@@ -77,6 +84,7 @@ struct SetListStruct
 		int preparationQuantity;
 		IdtAtomic<int> drawpadFps;
 		IdtAtomic<bool> superDraw;
+		IdtAtomic<bool> dirtyRectOpt; // 脏矩形增量合成（高分辨率优化）
 	}performanceSetting;
 #pragma endregion
 
