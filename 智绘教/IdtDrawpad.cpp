@@ -64,8 +64,8 @@ void MarkStrokeDirty(StrokeImageClass* img, double x0, double y0, double x1, dou
 
 	if (r.left < 0) r.left = 0;
 	if (r.top < 0) r.top = 0;
-	if (r.right > img->canvas->getwidth()) r.right = img->canvas->getwidth();
-	if (r.bottom > img->canvas->getheight()) r.bottom = img->canvas->getheight();
+	if (r.right > MainMonitor.MonitorWidth) r.right = MainMonitor.MonitorWidth;
+	if (r.bottom > MainMonitor.MonitorHeight) r.bottom = MainMonitor.MonitorHeight;
 	if (r.right <= r.left || r.bottom <= r.top) return;
 
 	unique_lock lock(img->sm);
@@ -80,6 +80,41 @@ void MarkStrokeDirty(StrokeImageClass* img, double x0, double y0, double x1, dou
 		UnionRect(&u, &img->dirtyRect, &r);
 		img->dirtyRect = u;
 	}
+}
+
+// 区域画布：确保笔迹画布覆盖指定屏幕区域，不足时扩容并迁移内容（调用方不得持有 img->sm）
+void EnsureStrokeCanvas(StrokeImageClass* img, IMAGE*& canvas, unique_ptr<Graphics>& graphics, double x0, double y0, double x1, double y1, double margin)
+{
+	if (img == nullptr || canvas == nullptr) return;
+
+	int needL = (int)floor(min(x0, x1) - margin), needT = (int)floor(min(y0, y1) - margin);
+	int needR = (int)ceil(max(x0, x1) + margin), needB = (int)ceil(max(y0, y1) + margin);
+
+	int curL = img->originX, curT = img->originY;
+	int curR = curL + canvas->getwidth(), curB = curT + canvas->getheight();
+
+	if (needL >= curL && needT >= curT && needR <= curR && needB <= curB) return;
+
+	int newL = max(min(curL, needL) - 256, 0), newT = max(min(curT, needT) - 256, 0);
+	int newR = min(max(curR, needR) + 256, (int)MainMonitor.MonitorWidth), newB = min(max(curB, needB) + 256, (int)MainMonitor.MonitorHeight);
+	if (newR <= newL || newB <= newT) return;
+
+	IMAGE* newCanvas = new IMAGE(newR - newL, newB - newT);
+	SetImageColor(*newCanvas, RGBA(0, 0, 0, 0), true);
+	hiex::TransparentImage(newCanvas, curL - newL, curT - newT, canvas);
+
+	unique_lock lock(img->sm);
+	img->canvas = newCanvas;
+	img->originX = newL;
+	img->originY = newT;
+	delete canvas;
+	lock.unlock();
+
+	canvas = newCanvas;
+
+	graphics.reset(new Graphics(GetImageHDC(canvas)));
+	graphics->SetSmoothingMode(SmoothingModeHighQuality);
+	graphics->TranslateTransform((REAL)-newL, (REAL)-newT);
 }
 
 IMAGE drawpad; //主画板
@@ -536,7 +571,7 @@ void PrepareCanvas(int width, int height)
 		lockPrepareCanvasQueue1.unlock();
 		if (queueSize >= setlist.performanceSetting.preparationQuantity) break;
 
-		IMAGE* canvas = new IMAGE(width, height);
+		IMAGE* canvas = new IMAGE(512, 512); // 区域画布：预分配小块而非全屏
 		SetImageColor(*canvas, RGBA(0, 0, 0, 0), true);
 
 		unique_lock<shared_mutex> lockPrepareCanvasQueue2(prepareCanvasQueueSm);
@@ -559,7 +594,7 @@ void ResetPrepareCanvas()
 		}
 		else
 		{
-			IMAGE* canvas = new IMAGE(width, height);
+			IMAGE* canvas = new IMAGE(512, 512); // 区域画布：预分配小块而非全屏
 			SetImageColor(*canvas, RGBA(0, 0, 0, 0), true);
 
 			prepareCanvasQueue.push(canvas);
@@ -599,33 +634,31 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 		{
 			Canvas = prepareCanvasQueue.front();
 			prepareCanvasQueue.pop();
-			lockPrepareCanvasQueue1.unlock();
-
-			if (Canvas->getwidth() != screenInfo.width || Canvas->getheight() != screenInfo.height)
-			{
-				Canvas->Resize(screenInfo.width, screenInfo.height);
-				SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
-			}
 		}
-		else
-		{
-			lockPrepareCanvasQueue1.unlock();
+		lockPrepareCanvasQueue1.unlock();
 
-			Canvas = new IMAGE(screenInfo.width, screenInfo.height);
-			SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
-		}
+		if (Canvas == nullptr) Canvas = new IMAGE(512, 512); // 区域画布：初始小块
+		SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
+
 		thread(PrepareCanvas, screenInfo.width, screenInfo.height).detach();
 		if (Canvas == nullptr) return;
 	}
 
-	// 绘制画布定义
-	TouchMode mode;
-	Graphics graphics(GetImageHDC(Canvas));
-	graphics.SetSmoothingMode(SmoothingModeHighQuality);
-
 	// 绘制队列
 	StrokeImageClass* multiStrokeImage = new StrokeImageClass;
 	multiStrokeImage->canvas = Canvas;
+
+	// 区域画布：以落笔点为中心确定画布原点
+	{
+		multiStrokeImage->originX = max(0, min(pointInfo.previousX - 256, screenInfo.width - 512));
+		multiStrokeImage->originY = max(0, min(pointInfo.previousY - 256, screenInfo.height - 512));
+	}
+
+	// 绘制画布定义（平移变换使后续绘制可直接使用屏幕坐标）
+	TouchMode mode;
+	unique_ptr<Graphics> graphicsPtr(new Graphics(GetImageHDC(Canvas)));
+	graphicsPtr->SetSmoothingMode(SmoothingModeHighQuality);
+	graphicsPtr->TranslateTransform((REAL)-multiStrokeImage->originX, (REAL)-multiStrokeImage->originY);
 
 	if (stateModeSelect == StateModeSelectEnum::IdtPen)
 	{
@@ -635,15 +668,21 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 
 		vector<Point> actualPoints = { Point(pointInfo.previousX, pointInfo.previousY) }; // 实际点集
 
+		// 区域画布：确保覆盖首笔
+		{
+			float firstWidth = (stateInfo.Pen.ModeSelect == PenModeSelectEnum::IdtPenBrush1) ? stateInfo.Pen.Brush1.width : stateInfo.Pen.Highlighter1.width;
+			EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, pointInfo.previousX, pointInfo.previousY, pointInfo.previousX, pointInfo.previousY, firstWidth / 2.0 + 4.0);
+		}
+
 		//首次绘制（后续修改，即画点）
 		{
 			if (stateInfo.Pen.ModeSelect == PenModeSelectEnum::IdtPenBrush1)
 			{
-				hiex::EasyX_Gdiplus_SolidEllipse(float((float)pointInfo.previousX - stateInfo.Pen.Brush1.width / 2.0), float((float)pointInfo.previousY - stateInfo.Pen.Brush1.width / 2.0), stateInfo.Pen.Brush1.width, stateInfo.Pen.Brush1.width, stateInfo.Pen.Brush1.color, false, SmoothingModeHighQuality, Canvas);
+				hiex::EasyX_Gdiplus_SolidEllipse(float((float)(pointInfo.previousX - multiStrokeImage->originX) - stateInfo.Pen.Brush1.width / 2.0), float((float)(pointInfo.previousY - multiStrokeImage->originY) - stateInfo.Pen.Brush1.width / 2.0), stateInfo.Pen.Brush1.width, stateInfo.Pen.Brush1.width, stateInfo.Pen.Brush1.color, false, SmoothingModeHighQuality, Canvas);
 			}
 			else if (stateInfo.Pen.ModeSelect == PenModeSelectEnum::IdtPenHighlighter1)
 			{
-				hiex::EasyX_Gdiplus_SolidEllipse(float((float)pointInfo.previousX - stateInfo.Pen.Highlighter1.width / 2.0), float((float)pointInfo.previousY - stateInfo.Pen.Highlighter1.width / 2.0), stateInfo.Pen.Highlighter1.width, stateInfo.Pen.Highlighter1.width, stateInfo.Pen.Highlighter1.color, false, SmoothingModeHighQuality, Canvas);
+				hiex::EasyX_Gdiplus_SolidEllipse(float((float)(pointInfo.previousX - multiStrokeImage->originX) - stateInfo.Pen.Highlighter1.width / 2.0), float((float)(pointInfo.previousY - multiStrokeImage->originY) - stateInfo.Pen.Highlighter1.width / 2.0), stateInfo.Pen.Highlighter1.width, stateInfo.Pen.Highlighter1.width, stateInfo.Pen.Highlighter1.color, false, SmoothingModeHighQuality, Canvas);
 			}
 		}
 
@@ -734,6 +773,12 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 				}
 			}
 
+			// 区域画布：确保覆盖新线段
+			{
+				float segWidth = (stateInfo.Pen.ModeSelect == PenModeSelectEnum::IdtPenBrush1) ? stateInfo.Pen.Brush1.width : stateInfo.Pen.Highlighter1.width;
+				EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, pointInfo.previousX, pointInfo.previousY, mode.pt.x, mode.pt.y, segWidth / 2.0 + 4.0);
+			}
+
 			// 绘制
 			{
 				Pen pen(hiex::ConvertToGdiplusColor(RGBA(0, 0, 0, 255), false));
@@ -751,7 +796,7 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 
 				// 绘制
 				//unique_lock lockMultiStrokeImage(multiStrokeImage->sm);
-				graphics.DrawLine(&pen, pointInfo.previousX, pointInfo.previousY, (pointInfo.x = mode.pt.x), (pointInfo.y = mode.pt.y));
+				graphicsPtr->DrawLine(&pen, pointInfo.previousX, pointInfo.previousY, (pointInfo.x = mode.pt.x), (pointInfo.y = mode.pt.y));
 				MarkStrokeDirty(multiStrokeImage, pointInfo.previousX, pointInfo.previousY, mode.pt.x, mode.pt.y, pen.GetWidth() / 2.0 + 4.0);
 				//lockMultiStrokeImage.unlock();
 
@@ -846,9 +891,10 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 					pen.SetColor(hiex::ConvertToGdiplusColor(stateInfo.Pen.Brush1.color, false));
 					pen.SetWidth(stateInfo.Pen.Brush1.width);
 
+					if (inkTangentRectangle.left != -1) EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, inkTangentRectangle.left, inkTangentRectangle.top, inkTangentRectangle.right, inkTangentRectangle.bottom, pen.GetWidth() / 2.0 + 4.0);
 					unique_lock lockMultiStrokeImage(multiStrokeImage->sm);
 					SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
-					graphics.DrawLine(&pen, start.X, start.Y, end.X, end.Y);
+					graphicsPtr->DrawLine(&pen, start.X, start.Y, end.X, end.Y);
 					lockMultiStrokeImage.unlock();
 					if (inkTangentRectangle.left != -1) MarkStrokeDirty(multiStrokeImage, inkTangentRectangle.left, inkTangentRectangle.top, inkTangentRectangle.right, inkTangentRectangle.bottom, pen.GetWidth() / 2.0 + 4.0);
 				}
@@ -864,9 +910,10 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 					pen.SetColor(hiex::ConvertToGdiplusColor(stateInfo.Pen.Brush1.color, false));
 					pen.SetWidth(stateInfo.Pen.Brush1.width);
 
+					if (inkTangentRectangle.left != -1) EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, inkTangentRectangle.left, inkTangentRectangle.top, inkTangentRectangle.right, inkTangentRectangle.bottom, pen.GetWidth() / 2.0 + 4.0);
 					unique_lock lockMultiStrokeImage(multiStrokeImage->sm);
 					SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
-					graphics.DrawCurve(&pen, actualPoints.data(), actualPoints.size(), 0.4f);
+					graphicsPtr->DrawCurve(&pen, actualPoints.data(), actualPoints.size(), 0.4f);
 					lockMultiStrokeImage.unlock();
 					if (inkTangentRectangle.left != -1) MarkStrokeDirty(multiStrokeImage, inkTangentRectangle.left, inkTangentRectangle.top, inkTangentRectangle.right, inkTangentRectangle.bottom, pen.GetWidth() / 2.0 + 4.0);
 				}
@@ -884,9 +931,10 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 					pen.SetColor(hiex::ConvertToGdiplusColor(stateInfo.Pen.Highlighter1.color, false));
 					pen.SetWidth(stateInfo.Pen.Highlighter1.width);
 
+					if (inkTangentRectangle.left != -1) EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, inkTangentRectangle.left, inkTangentRectangle.top, inkTangentRectangle.right, inkTangentRectangle.bottom, pen.GetWidth() / 2.0 + 4.0);
 					unique_lock lockMultiStrokeImage(multiStrokeImage->sm);
 					SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
-					graphics.DrawCurve(&pen, actualPoints.data(), actualPoints.size(), 0.4f);
+					graphicsPtr->DrawCurve(&pen, actualPoints.data(), actualPoints.size(), 0.4f);
 					lockMultiStrokeImage.unlock();
 					if (inkTangentRectangle.left != -1) MarkStrokeDirty(multiStrokeImage, inkTangentRectangle.left, inkTangentRectangle.top, inkTangentRectangle.right, inkTangentRectangle.bottom, pen.GetWidth() / 2.0 + 4.0);
 				}
@@ -922,6 +970,9 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 		}
 		// TODO 橡皮 OC 平滑和全套橡皮粗细管理模块
 
+		// 区域画布：确保覆盖橡皮外框
+		EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, pointInfo.previousX, pointInfo.previousY, pointInfo.previousX, pointInfo.previousY, rubbersize / 2.0 + 4.0);
+
 		//首次绘制
 		{
 			GraphicsPath path;
@@ -946,7 +997,7 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 			}
 			LockExtremePointSm.unlock();
 
-			hiex::EasyX_Gdiplus_Ellipse(pointInfo.previousX - (float)(rubbersize) / 2, pointInfo.previousY - (float)(rubbersize) / 2, (float)rubbersize, (float)rubbersize, RGBA(130, 130, 130, 200), 3, true, SmoothingModeHighQuality, Canvas);
+			hiex::EasyX_Gdiplus_Ellipse(pointInfo.previousX - multiStrokeImage->originX - (float)(rubbersize) / 2, pointInfo.previousY - multiStrokeImage->originY - (float)(rubbersize) / 2, (float)rubbersize, (float)rubbersize, RGBA(130, 130, 130, 200), 3, true, SmoothingModeHighQuality, Canvas);
 			MarkStrokeDirty(multiStrokeImage, pointInfo.previousX, pointInfo.previousY, pointInfo.previousX, pointInfo.previousY, rubbersize / 2.0 + 4.0);
 		}
 
@@ -1014,6 +1065,9 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 			if (rubbersize < trubbersize) rubbersize = rubbersize + max(0.1, (trubbersize - rubbersize) / 50);
 			else if (rubbersize > trubbersize) rubbersize = rubbersize + min(-0.1, (trubbersize - rubbersize) / 50);
 
+			// 区域画布：确保覆盖擦除区域
+			EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, pointInfo.previousX, pointInfo.previousY, pointInfo.x, pointInfo.y, rubbersize / 2.0 + 4.0);
+
 			if ((mode.pt.x == pointInfo.previousX && mode.pt.y == pointInfo.previousY))
 			{
 				// 擦除
@@ -1043,7 +1097,7 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 				// 绘制橡皮外框
 				unique_lock lockMultiStrokeImage(multiStrokeImage->sm);
 				SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
-				hiex::EasyX_Gdiplus_Ellipse(pointInfo.x - (float)(rubbersize) / 2, pointInfo.y - (float)(rubbersize) / 2, (float)rubbersize, (float)rubbersize, RGBA(130, 130, 130, 200), 3, true, SmoothingModeHighQuality, Canvas);
+				hiex::EasyX_Gdiplus_Ellipse(pointInfo.x - multiStrokeImage->originX - (float)(rubbersize) / 2, pointInfo.y - multiStrokeImage->originY - (float)(rubbersize) / 2, (float)rubbersize, (float)rubbersize, RGBA(130, 130, 130, 200), 3, true, SmoothingModeHighQuality, Canvas);
 				lockMultiStrokeImage.unlock();
 				MarkStrokeDirty(multiStrokeImage, pointInfo.previousX, pointInfo.previousY, pointInfo.x, pointInfo.y, rubbersize / 2.0 + 4.0);
 			}
@@ -1083,7 +1137,7 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 				// 绘制橡皮外框
 				unique_lock lockMultiStrokeImage(multiStrokeImage->sm);
 				SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
-				hiex::EasyX_Gdiplus_Ellipse(pointInfo.x - (float)(rubbersize) / 2, pointInfo.y - (float)(rubbersize) / 2, (float)rubbersize, (float)rubbersize, RGBA(130, 130, 130, 200), 3, true, SmoothingModeHighQuality, Canvas);
+				hiex::EasyX_Gdiplus_Ellipse(pointInfo.x - multiStrokeImage->originX - (float)(rubbersize) / 2, pointInfo.y - multiStrokeImage->originY - (float)(rubbersize) / 2, (float)rubbersize, (float)rubbersize, RGBA(130, 130, 130, 200), 3, true, SmoothingModeHighQuality, Canvas);
 				lockMultiStrokeImage.unlock();
 				MarkStrokeDirty(multiStrokeImage, pointInfo.previousX, pointInfo.previousY, pointInfo.x, pointInfo.y, rubbersize / 2.0 + 4.0);
 			}
@@ -1152,9 +1206,10 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 				pen.SetEndCap(LineCapRound);
 
 				// 绘制直线
+				EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, pointInfo.previousX, pointInfo.previousY, pointInfo.x, pointInfo.y, stateInfo.Pen.Brush1.width / 2.0 + 4.0);
 				unique_lock lockMultiStrokeImage(multiStrokeImage->sm);
 				SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
-				graphics.DrawLine(&pen, pointInfo.previousX, pointInfo.previousY, pointInfo.x, pointInfo.y);
+				graphicsPtr->DrawLine(&pen, pointInfo.previousX, pointInfo.previousY, pointInfo.x, pointInfo.y);
 				lockMultiStrokeImage.unlock();
 				MarkStrokeDirty(multiStrokeImage, pointInfo.previousX, pointInfo.previousY, pointInfo.x, pointInfo.y, stateInfo.Pen.Brush1.width / 2.0 + 4.0);
 			}
@@ -1166,9 +1221,10 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 				int rectangle_heigth = abs(pointInfo.previousX - pointInfo.x) + 1, rectangle_width = abs(pointInfo.previousY - pointInfo.y) + 1;
 
 				// 绘制矩形
+				EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, rectangle_x, rectangle_y, rectangle_x + rectangle_heigth, rectangle_y + rectangle_width, stateInfo.Pen.Brush1.width / 2.0 + 4.0);
 				unique_lock lockMultiStrokeImage(multiStrokeImage->sm);
 				SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
-				hiex::EasyX_Gdiplus_RoundRect((float)rectangle_x, (float)rectangle_y, (float)rectangle_heigth, (float)rectangle_width, 3, 3, stateInfo.Pen.Brush1.color, stateInfo.Pen.Brush1.width, false, SmoothingModeHighQuality, Canvas);
+				hiex::EasyX_Gdiplus_RoundRect((float)(rectangle_x - multiStrokeImage->originX), (float)(rectangle_y - multiStrokeImage->originY), (float)rectangle_heigth, (float)rectangle_width, 3, 3, stateInfo.Pen.Brush1.color, stateInfo.Pen.Brush1.width, false, SmoothingModeHighQuality, Canvas);
 				lockMultiStrokeImage.unlock();
 				MarkStrokeDirty(multiStrokeImage, rectangle_x, rectangle_y, rectangle_x + rectangle_heigth, rectangle_y + rectangle_width, stateInfo.Pen.Brush1.width / 2.0 + 4.0);
 			}
@@ -1250,9 +1306,10 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 					pen.SetColor(hiex::ConvertToGdiplusColor(stateInfo.Pen.Brush1.color, false));
 					pen.SetWidth(stateInfo.Pen.Brush1.width);
 
+					EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, start.X, start.Y, end.X, end.Y, pen.GetWidth() / 2.0 + 4.0);
 					unique_lock lockMultiStrokeImage(multiStrokeImage->sm);
 					SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
-					graphics.DrawLine(&pen, start.X, start.Y, end.X, end.Y);
+					graphicsPtr->DrawLine(&pen, start.X, start.Y, end.X, end.Y);
 					lockMultiStrokeImage.unlock();
 					MarkStrokeDirty(multiStrokeImage, start.X, start.Y, end.X, end.Y, pen.GetWidth() / 2.0 + 4.0);
 				}
@@ -1368,9 +1425,10 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 					int w = abs(l1.X - r2.X) + 1;
 					int h = abs(l1.Y - r2.Y) + 1;
 
+					EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, x, y, x + w, y + h, stateInfo.Pen.Brush1.width / 2.0 + 4.0);
 					unique_lock lockMultiStrokeImage(multiStrokeImage->sm);
 					SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
-					hiex::EasyX_Gdiplus_RoundRect((float)x, (float)y, (float)w, (float)h, 3, 3, stateInfo.Pen.Brush1.color, stateInfo.Pen.Brush1.width, false, SmoothingModeHighQuality, Canvas);
+					hiex::EasyX_Gdiplus_RoundRect((float)(x - multiStrokeImage->originX), (float)(y - multiStrokeImage->originY), (float)w, (float)h, 3, 3, stateInfo.Pen.Brush1.color, stateInfo.Pen.Brush1.width, false, SmoothingModeHighQuality, Canvas);
 					lockMultiStrokeImage.unlock();
 					MarkStrokeDirty(multiStrokeImage, x, y, x + w, y + h, stateInfo.Pen.Brush1.width / 2.0 + 4.0);
 				}
@@ -1423,19 +1481,21 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 			{
 				pointInfo.x = mode.pt.x, pointInfo.y = mode.pt.y;
 
+				EnsureStrokeCanvas(multiStrokeImage, Canvas, graphicsPtr, pointInfo.x - static_cast<double>(mode.touchWidth) / 2.0, pointInfo.y - static_cast<double>(mode.touchHeight) / 2.0, pointInfo.x + 200.0, pointInfo.y + 200.0, 20.0);
+
 				unique_lock lockMultiStrokeImage(multiStrokeImage->sm);
 
 				SetImageColor(*Canvas, RGBA(0, 0, 0, 0), true);
 
 				if (mode.touchWidth != 0ll && mode.touchHeight != 0ll)
-					hiex::EasyX_Gdiplus_Rectangle(pointInfo.x - static_cast<float>(mode.touchWidth) / 2.0f, pointInfo.y - static_cast<float>(mode.touchHeight) / 2.0f, static_cast<float>(mode.touchWidth) + 1.0f, static_cast<float>(mode.touchHeight) + 1.0f, RGBA(255, 0, 0, 255), 3.0f, true, SmoothingModeHighQuality, Canvas);
-				hiex::EasyX_Gdiplus_Ellipse(pointInfo.x - 15.0f, pointInfo.y - 15.0f, 31.0f, 31.0f, RGBA(0, 255, 0, 255), 2.0f, true, SmoothingModeHighQuality, Canvas);
+					hiex::EasyX_Gdiplus_Rectangle(pointInfo.x - multiStrokeImage->originX - static_cast<float>(mode.touchWidth) / 2.0f, pointInfo.y - multiStrokeImage->originY - static_cast<float>(mode.touchHeight) / 2.0f, static_cast<float>(mode.touchWidth) + 1.0f, static_cast<float>(mode.touchHeight) + 1.0f, RGBA(255, 0, 0, 255), 3.0f, true, SmoothingModeHighQuality, Canvas);
+				hiex::EasyX_Gdiplus_Ellipse(pointInfo.x - multiStrokeImage->originX - 15.0f, pointInfo.y - multiStrokeImage->originY - 15.0f, 31.0f, 31.0f, RGBA(0, 255, 0, 255), 2.0f, true, SmoothingModeHighQuality, Canvas);
 				{
 					wstring text = to_wstring(mode.touchWidth) + L"px * " + to_wstring(mode.touchHeight) + L"px";
 
 					Gdiplus::Font gp_font(&HarmonyOS_fontFamily, 24.0f, FontStyleRegular, UnitPixel);
 					SolidBrush WordBrush(Gdiplus::Color(255, 255, 0, 0));
-					graphics.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
+					graphicsPtr->SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
 
 					RECT words_rect;
 					{
@@ -1445,7 +1505,7 @@ void MultiFingerDrawing(LONG pid, TouchMode initialMode, StateModeClass stateInf
 						words_rect.bottom = static_cast<LONG>(pointInfo.y + 200);
 					}
 
-					graphics.DrawString(text.c_str(), -1, &gp_font, hiex::RECTToRectF(words_rect), &stringFormat_left, &WordBrush);
+					graphicsPtr->DrawString(text.c_str(), -1, &gp_font, hiex::RECTToRectF(words_rect), &stringFormat_left, &WordBrush);
 				}
 
 				lockMultiStrokeImage.unlock();
@@ -1565,7 +1625,7 @@ void DrawpadDrawing()
 						LockExtremePointSm.unlock();
 						LockStrokeBackImageSm.unlock();
 					}
-					else if (!RecallImage.empty() && !CompareImagesWithBuffer(&drawpad, &RecallImage.back().img))
+					else if (!RecallImage.empty() && !CompareWithRecallEntry(&drawpad, RecallImage.back()))
 					{
 						bool save_recond = false;
 						if (recall_image_reference > recall_image_recond) recall_image_recond++;
@@ -1594,11 +1654,11 @@ void DrawpadDrawing()
 					}
 				}
 
-				if (!RecallImage.empty() && !CompareImagesWithBuffer(&empty_drawpad, &RecallImage.back().img))
+				if (!RecallImage.empty() && !CompareWithRecallEntry(&empty_drawpad, RecallImage.back()))
 				{
 					if (PptInfoStateBuffer.TotalPage != -1)
 					{
-						if (PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] && CompareImagesWithBuffer(&drawpad, &PptImg.Image[PptInfoStateBuffer.CurrentPage]))
+						if (PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] && CompareWithPptPage(&drawpad, PptInfoStateBuffer.CurrentPage))
 							saveImage = false;
 					}
 					if (recall_image_reference <= recall_image_recond && recall_image_recond % 10 == 0 && recall_image_recond >= 20)
@@ -1609,10 +1669,10 @@ void DrawpadDrawing()
 
 					if (saveImage)
 					{
-						if (offSignal) SaveScreenShot(RecallImage.back().img, true);
+						if (offSignal) SaveScreenShot(GetRecallEntryImage(RecallImage.back()), true);
 						else
 						{
-							thread SaveScreenShot_thread(SaveScreenShot, RecallImage.back().img, true);
+							thread SaveScreenShot_thread(SaveScreenShot, GetRecallEntryImage(RecallImage.back()), true);
 							SaveScreenShot_thread.detach();
 						}
 					}
@@ -1655,7 +1715,7 @@ void DrawpadDrawing()
 						PptImg.IsSave = true;
 						PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] = true;
 
-						PptImg.Image[PptInfoStateBuffer.CurrentPage] = drawpad;
+						StorePptPageImage(PptInfoStateBuffer.CurrentPage, drawpad);
 					}
 				}
 				recall_image_recond = 0, FirstDraw = true;
@@ -1683,7 +1743,7 @@ void DrawpadDrawing()
 				{
 					if (PptInfoStateBuffer.TotalPage != -1 && ppt_switch_count != 0 && PptImg.IsSaved[PptInfoStateBuffer.CurrentPage])
 					{
-						drawpad = PptImg.Image[PptInfoStateBuffer.CurrentPage];
+						drawpad = GetPptPageImage(PptInfoStateBuffer.CurrentPage);
 					}
 					else if (!reserve_drawpad) SetImageColor(drawpad, RGBA(0, 0, 0, 0), true);
 					reserve_drawpad = false;
@@ -1743,16 +1803,16 @@ void DrawpadDrawing()
 									LockExtremePointSm.unlock();
 									LockStrokeBackImageSm.unlock();
 								}
-								else if (!RecallImage.empty() && !CompareImagesWithBuffer(&drawpad, &RecallImage.back().img))
+								else if (!RecallImage.empty() && !CompareWithRecallEntry(&drawpad, RecallImage.back()))
 								{
-									if (!PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] || !CompareImagesWithBuffer(&drawpad, &PptImg.Image[PptInfoStateBuffer.CurrentPage]))
+									if (!PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] || !CompareWithPptPage(&drawpad, PptInfoStateBuffer.CurrentPage))
 									{
 										bool save_recond = false;
 										if (recall_image_reference > recall_image_recond) recall_image_recond++;
 										else recall_image_recond = recall_image_reference = recall_image_reference + 1, save_recond = true;
 										if (recall_image_recond % 10 == 0 && save_recond && recall_image_recond >= 20)
 										{
-											thread SaveScreenShot_thread(SaveScreenShot, RecallImage[0].img, false);
+											thread SaveScreenShot_thread(SaveScreenShot, GetRecallEntryImage(RecallImage[0]), false);
 											SaveScreenShot_thread.detach();
 										}
 									}
@@ -1780,20 +1840,20 @@ void DrawpadDrawing()
 								}
 							}
 
-							if (!RecallImage.empty() && !CompareImagesWithBuffer(&empty_drawpad, &RecallImage.back().img))
+							if (!RecallImage.empty() && !CompareWithRecallEntry(&empty_drawpad, RecallImage.back()))
 							{
 								std::unique_lock<std::shared_mutex> LockStrokeBackImageSm(StrokeBackImageSm);
 								std::unique_lock<std::shared_mutex> LockExtremePointSm(ExtremePointSm);
 
-								if (!PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] || !CompareImagesWithBuffer(&RecallImage.back().img, &PptImg.Image[PptInfoStateBuffer.CurrentPage]))
+								if (!PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] || !CompareRecallEntryWithPptPage(RecallImage.back(), PptInfoStateBuffer.CurrentPage))
 								{
-									thread SaveScreenShot_thread(SaveScreenShot, RecallImage.back().img, true);
+									thread SaveScreenShot_thread(SaveScreenShot, GetRecallEntryImage(RecallImage.back()), true);
 									SaveScreenShot_thread.detach();
 								}
 
 								PptImg.IsSave = true;
 								PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] = true;
-								PptImg.Image[PptInfoStateBuffer.CurrentPage] = RecallImage.back().img;
+								{ IMAGE tmpRecallImage = GetRecallEntryImage(RecallImage.back()); StorePptPageImage(PptInfoStateBuffer.CurrentPage, tmpRecallImage); }
 
 								extreme_point.clear();
 								RecallImage.back().type = 1;
@@ -1818,7 +1878,7 @@ void DrawpadDrawing()
 
 							if (PptImg.IsSaved[temp_currentpage] == true)
 							{
-								drawpad = PptImg.Image[temp_currentpage];
+								drawpad = GetPptPageImage(temp_currentpage);
 							}
 							else
 							{
@@ -1890,16 +1950,16 @@ void DrawpadDrawing()
 							LockExtremePointSm.unlock();
 							LockStrokeBackImageSm.unlock();
 						}
-						else if (!RecallImage.empty() && !CompareImagesWithBuffer(&drawpad, &RecallImage.back().img))
+						else if (!RecallImage.empty() && !CompareWithRecallEntry(&drawpad, RecallImage.back()))
 						{
-							if (!PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] || !CompareImagesWithBuffer(&drawpad, &PptImg.Image[PptInfoStateBuffer.CurrentPage]))
+							if (!PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] || !CompareWithPptPage(&drawpad, PptInfoStateBuffer.CurrentPage))
 							{
 								bool save_recond = false;
 								if (recall_image_reference > recall_image_recond) recall_image_recond++;
 								else recall_image_recond = recall_image_reference = recall_image_reference + 1, save_recond = true;
 								if (recall_image_recond % 10 == 0 && save_recond && recall_image_recond >= 20)
 								{
-									thread SaveScreenShot_thread(SaveScreenShot, RecallImage[0].img, false);
+									thread SaveScreenShot_thread(SaveScreenShot, GetRecallEntryImage(RecallImage[0]), false);
 									SaveScreenShot_thread.detach();
 								}
 							}
@@ -1927,20 +1987,20 @@ void DrawpadDrawing()
 						}
 					}
 
-					if (!RecallImage.empty() && !CompareImagesWithBuffer(&empty_drawpad, &RecallImage.back().img))
+					if (!RecallImage.empty() && !CompareWithRecallEntry(&empty_drawpad, RecallImage.back()))
 					{
 						std::unique_lock<std::shared_mutex> LockStrokeBackImageSm(StrokeBackImageSm);
 						std::unique_lock<std::shared_mutex> LockExtremePointSm(ExtremePointSm);
 
-						if (!PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] || !CompareImagesWithBuffer(&RecallImage.back().img, &PptImg.Image[PptInfoStateBuffer.CurrentPage]))
+						if (!PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] || !CompareRecallEntryWithPptPage(RecallImage.back(), PptInfoStateBuffer.CurrentPage))
 						{
-							thread SaveScreenShot_thread(SaveScreenShot, RecallImage.back().img, true);
+							thread SaveScreenShot_thread(SaveScreenShot, GetRecallEntryImage(RecallImage.back()), true);
 							SaveScreenShot_thread.detach();
 						}
 
 						PptImg.IsSave = true;
 						PptImg.IsSaved[PptInfoStateBuffer.CurrentPage] = true;
-						PptImg.Image[PptInfoStateBuffer.CurrentPage] = RecallImage.back().img;
+						{ IMAGE tmpRecallImage = GetRecallEntryImage(RecallImage.back()); StorePptPageImage(PptInfoStateBuffer.CurrentPage, tmpRecallImage); }
 
 						extreme_point.clear();
 						RecallImage.back().type = 1;
@@ -1965,7 +2025,7 @@ void DrawpadDrawing()
 
 					if (PptImg.IsSaved[temp_currentpage] == true)
 					{
-						drawpad = PptImg.Image[temp_currentpage];
+						drawpad = GetPptPageImage(temp_currentpage);
 					}
 					else
 					{
@@ -2062,9 +2122,14 @@ void DrawpadDrawing()
 					RECT affected, inter;
 					UnionRect(&affected, &currentStrokeImage->prevDirtyRect, &currentStrokeImage->dirtyRect);
 					if (IntersectRect(&inter, &affected, &frameDirty))
-						hiex::TransparentImage(&window_background, inter.left, inter.top, inter.right - inter.left, inter.bottom - inter.top, currentStrokeImage->canvas, inter.left, inter.top, inter.right - inter.left, inter.bottom - inter.top, currentStrokeImage->alpha);
+					{
+						RECT canvasScreen = { currentStrokeImage->originX, currentStrokeImage->originY, currentStrokeImage->originX + currentStrokeImage->canvas->getwidth(), currentStrokeImage->originY + currentStrokeImage->canvas->getheight() };
+						RECT c;
+						if (IntersectRect(&c, &inter, &canvasScreen))
+							hiex::TransparentImage(&window_background, c.left, c.top, c.right - c.left, c.bottom - c.top, currentStrokeImage->canvas, c.left - currentStrokeImage->originX, c.top - currentStrokeImage->originY, c.right - c.left, c.bottom - c.top, currentStrokeImage->alpha);
+					}
 				}
-				else hiex::TransparentImage(&window_background, 0, 0, currentStrokeImage->canvas, currentStrokeImage->alpha);
+				else hiex::TransparentImage(&window_background, currentStrokeImage->originX, currentStrokeImage->originY, currentStrokeImage->canvas, currentStrokeImage->alpha);
 			}
 
 			lock2.unlock();
@@ -2096,9 +2161,14 @@ void DrawpadDrawing()
 						RECT mergeRect;
 						UnionRect(&mergeRect, &currentStrokeImage->prevDirtyRect, &currentStrokeImage->dirtyRect);
 						if (!IsRectEmpty(&mergeRect))
-							hiex::TransparentImage(&drawpad, mergeRect.left, mergeRect.top, mergeRect.right - mergeRect.left, mergeRect.bottom - mergeRect.top, currentStrokeImage->canvas, mergeRect.left, mergeRect.top, mergeRect.right - mergeRect.left, mergeRect.bottom - mergeRect.top, currentStrokeImage->alpha);
+						{
+							RECT canvasScreen = { currentStrokeImage->originX, currentStrokeImage->originY, currentStrokeImage->originX + currentStrokeImage->canvas->getwidth(), currentStrokeImage->originY + currentStrokeImage->canvas->getheight() };
+							RECT c;
+							if (IntersectRect(&c, &mergeRect, &canvasScreen))
+								hiex::TransparentImage(&drawpad, c.left, c.top, c.right - c.left, c.bottom - c.top, currentStrokeImage->canvas, c.left - currentStrokeImage->originX, c.top - currentStrokeImage->originY, c.right - c.left, c.bottom - c.top, currentStrokeImage->alpha);
+						}
 					}
-					else hiex::TransparentImage(&drawpad, 0, 0, currentStrokeImage->canvas, currentStrokeImage->alpha);
+					else hiex::TransparentImage(&drawpad, currentStrokeImage->originX, currentStrokeImage->originY, currentStrokeImage->canvas, currentStrokeImage->alpha);
 					lockStrokeBackImageSm.unlock();
 
 					delete currentStrokeImage;
@@ -2118,7 +2188,7 @@ void DrawpadDrawing()
 
 						if (recall_image_recond % 10 == 0 && save_recond && recall_image_recond >= 20)
 						{
-							thread SaveScreenShot_thread(SaveScreenShot, RecallImage[0].img, false);
+							thread SaveScreenShot_thread(SaveScreenShot, GetRecallEntryImage(RecallImage[0]), false);
 							SaveScreenShot_thread.detach();
 						}
 
@@ -2169,7 +2239,7 @@ void DrawpadDrawing()
 						if (!RecallImage.empty())
 						{
 							std::shared_lock<std::shared_mutex> LockStrokeBackImageSm(StrokeBackImageSm);
-							save = !CompareImagesWithBuffer(&drawpad, &RecallImage.back().img);
+							save = !CompareWithRecallEntry(&drawpad, RecallImage.back());
 							LockStrokeBackImageSm.unlock();
 						}
 						else
@@ -2181,7 +2251,7 @@ void DrawpadDrawing()
 						{
 							if (recall_image_recond % 10 == 0 && save_recond && recall_image_recond >= 20)
 							{
-								thread SaveScreenShot_thread(SaveScreenShot, RecallImage[0].img, false);
+								thread SaveScreenShot_thread(SaveScreenShot, GetRecallEntryImage(RecallImage[0]), false);
 								SaveScreenShot_thread.detach();
 							}
 
@@ -2225,6 +2295,9 @@ void DrawpadDrawing()
 			UpdateLayeredWindowIndirect(drawpad_window, &ulwi);
 			ulwi.prcDirty = NULL;
 		}
+
+		// 空闲时压缩撤销历史
+		if (siz == 0) MaybeCompressRecallEntries();
 
 		//帧率锁
 		{
@@ -2303,8 +2376,6 @@ int drawpad_main()
 	DrawpadInstallHookThread.detach();
 	thread(KeyboardInteraction).detach();
 	{
-		SetImageColor(alpha_drawpad, RGBA(0, 0, 0, 0), true);
-
 		// 启动绘图库程序
 		hiex::Gdiplus_Try_Starup();
 

@@ -14,6 +14,9 @@ void LoadDrawpad();
 //保存图像到指定目录
 void SaveScreenShot(IMAGE img, bool record_pointer_add);
 
+// 撤销栈图像访问（自动解压 PNG 压缩存储）
+bool CompareWithRecallEntry(IMAGE* img, RecallStruct& entry);
+
 // 撤回操作
 void IdtRecall();
 // 超级恢复操作

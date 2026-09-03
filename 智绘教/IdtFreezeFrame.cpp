@@ -25,17 +25,16 @@ void FreezeFrameWindow()
 	SetWindowLong(freeze_window, GWL_EXSTYLE, WS_EX_TOOLWINDOW);//隐藏任务栏
 
 	IMAGE freeze_background, PptSign;
+	freeze_background.Resize(1, 1); // 按需分配：定格激活时才扩展为全屏
+	SetImageColor(freeze_background, RGBA(0, 0, 0, 0), true);
 	if (setlist.regularSetting.avoidFullScreen)
 	{
-		freeze_background.Resize(MainMonitor.MonitorWidth, MainMonitor.MonitorHeight - 1);
 		SetWindowPos(freeze_window, NULL, MainMonitor.rcMonitor.left, MainMonitor.rcMonitor.top, MainMonitor.MonitorWidth, MainMonitor.MonitorHeight - 1, SWP_NOZORDER | SWP_NOACTIVATE);
 	}
 	else
 	{
-		freeze_background.Resize(MainMonitor.MonitorWidth, MainMonitor.MonitorHeight);
 		SetWindowPos(freeze_window, NULL, MainMonitor.rcMonitor.left, MainMonitor.rcMonitor.top, MainMonitor.MonitorWidth, MainMonitor.MonitorHeight, SWP_NOZORDER | SWP_NOACTIVATE);
 	}
-	SetImageColor(freeze_background, RGBA(0, 0, 0, 0), true);
 	idtLoadImage(&PptSign, L"PNG", L"sign4");
 
 	// 设置BLENDFUNCTION结构体
@@ -97,6 +96,12 @@ void FreezeFrameWindow()
 			{
 				if (!show_freeze_window)
 				{
+					// 按需分配：定格激活时扩展为全屏
+					if (setlist.regularSetting.avoidFullScreen) freeze_background.Resize(MainMonitor.MonitorWidth, MainMonitor.MonitorHeight - 1);
+					else freeze_background.Resize(MainMonitor.MonitorWidth, MainMonitor.MonitorHeight);
+					sizeWnd = { freeze_background.getwidth(), freeze_background.getheight() };
+					ulwi.psize = &sizeWnd;
+
 					RequestUpdateMagWindow = 1;
 					show_freeze_window = true;
 				}
@@ -154,6 +159,11 @@ void FreezeFrameWindow()
 				SetImageColor(freeze_background, RGBA(0, 0, 0, 0), true);
 				ulwi.hdcSrc = GetImageHDC(&freeze_background);
 				UpdateLayeredWindowIndirect(freeze_window, &ulwi);
+
+				// 按需分配：退出定格后释放全屏位图
+				freeze_background.Resize(1, 1);
+				sizeWnd = { 1, 1 };
+				ulwi.psize = &sizeWnd;
 
 				RequestUpdateMagWindow = 0;
 				show_freeze_window = false;

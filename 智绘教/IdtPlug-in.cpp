@@ -200,6 +200,49 @@ IdtAtomic<int> PptUiAllReplaceSignal;
 // ppt 信息
 
 PptImgStruct PptImg = { false }; // 其存储幻灯片放映时产生的图像数据。
+
+IMAGE GetPptPageImage(int page)
+{
+	if (PptImg.cachedPage == page)
+	{
+		auto cacheIt = PptImg.Image.find(page);
+		if (cacheIt != PptImg.Image.end() && cacheIt->second.getwidth() > 0) return cacheIt->second;
+	}
+
+	auto pngIt = PptImg.ImagePng.find(page);
+	if (pngIt == PptImg.ImagePng.end()) return IMAGE();
+
+	IMAGE decoded;
+	if (!DecodePngMemoryToImage(pngIt->second, decoded)) return IMAGE();
+
+	PptImg.Image.clear(); // 仅缓存当前页
+	PptImg.Image[page] = decoded;
+	PptImg.cachedPage = page;
+
+	return decoded;
+}
+bool CompareWithPptPage(IMAGE* img, int page)
+{
+	IMAGE pageImg = GetPptPageImage(page);
+	return CompareImagesWithBuffer(img, &pageImg);
+}
+bool CompareRecallEntryWithPptPage(RecallStruct& entry, int page)
+{
+	IMAGE entryImg = GetRecallEntryImage(entry);
+	IMAGE pageImg = GetPptPageImage(page);
+	return CompareImagesWithBuffer(&entryImg, &pageImg);
+}
+void StorePptPageImage(int page, IMAGE& img)
+{
+	vector<BYTE> png;
+	if (!EncodeImageToPngMemory(&img, png)) return;
+
+	PptImg.ImagePng[page] = std::move(png);
+
+	PptImg.Image.clear();
+	PptImg.Image[page] = img;
+	PptImg.cachedPage = page;
+}
 PptInfoStateStruct PptInfoState = { -1, -1 }; // 其存储幻灯片放映软件当前的状态，First 代表总幻灯片页数，Second 代表当前幻灯片编号。
 PptInfoStateStruct PptInfoStateBuffer = { -1, -1 }; // PptInfoState 的缓冲变量。*1
 
@@ -2339,6 +2382,8 @@ void PptInfo()
 			PptImg.IsSave = false;
 			PptImg.IsSaved.clear();
 			PptImg.Image.clear();
+			PptImg.ImagePng.clear();
+			PptImg.cachedPage = -1;
 
 			ppt_show = NULL, ppt_software = L"";
 

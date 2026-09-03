@@ -236,6 +236,12 @@ void SaveScreenShot(IMAGE img, bool record_pointer_add)
 }
 
 // 撤回操作
+bool CompareWithRecallEntry(IMAGE* img, RecallStruct& entry)
+{
+	IMAGE entryImg = GetRecallEntryImage(entry);
+	return CompareImagesWithBuffer(img, &entryImg);
+}
+// 撤回操作
 void IdtRecall()
 {
 	// 标识绘制等待
@@ -265,19 +271,26 @@ void IdtRecall()
 
 	pair<int, int> tmp_recond = make_pair(0, 0);
 	int tmp_recall_image_type = 0;
+	bool skip_pop = false;
 	if (!RecallImage.empty())
 	{
 		tmp_recond = RecallImage.back().recond;
 		tmp_recall_image_type = RecallImage.back().type;
 
-		if (RecallImage.back().type == 2 && stateMode.StateModeSelect != StateModeSelectEnum::IdtSelection && !CompareImagesWithBuffer(&drawpad, &RecallImage.back().img));
-		else RecallImage.pop_back();
-		deque<RecallStruct>(RecallImage).swap(RecallImage); // 使用swap技巧来释放未使用的内存
+		if (RecallImage.back().type == 2 && stateMode.StateModeSelect != StateModeSelectEnum::IdtSelection && !CompareWithRecallEntry(&drawpad, RecallImage.back())) skip_pop = true;
+
+		if (!skip_pop)
+		{
+			unique_lock<shared_mutex> LockRecallImageSm(RecallImageSm);
+			if (!RecallImage.empty()) RecallImage.pop_back();
+			deque<RecallStruct>(RecallImage).swap(RecallImage); // 使用swap技巧来释放未使用的内存
+			LockRecallImageSm.unlock();
+		}
 	}
 
 	if (!RecallImage.empty())
 	{
-		drawpad = RecallImage.back().img;
+		drawpad = GetRecallEntryImage(RecallImage.back());
 		extreme_point = RecallImage.back().extreme_point;
 		recall_image_recond = RecallImage.back().recond.first;
 	}

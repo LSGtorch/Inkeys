@@ -10,6 +10,7 @@
 
 #pragma once
 #include "IdtMain.h"
+#include "IdtImage.h"
 
 #include "IdtD2DPreparation.h"
 #include "SuperTop/IdtToken.h"
@@ -204,9 +205,16 @@ struct PptImgStruct
 {
 	bool IsSave;
 	map<int, bool> IsSaved;
-	map<int, IMAGE> Image;
+	map<int, IMAGE> Image;				// 解码缓存（仅当前页）
+	map<int, vector<BYTE>> ImagePng;	// 压缩存储（内存优化）
+	int cachedPage = -1;
 };
 extern PptImgStruct PptImg;
+
+IMAGE GetPptPageImage(int page);				// 按需解码并返回页面图像副本
+void StorePptPageImage(int page, IMAGE& img);
+bool CompareWithPptPage(IMAGE* img, int page);	// 比较图像与指定页缓存（自动解压）
+bool CompareRecallEntryWithPptPage(RecallStruct& entry, int page);	// 比较撤销栈条目与指定页缓存	// 压缩存储页面图像
 struct PptInfoStateStruct
 {
 	int CurrentPage, TotalPage;

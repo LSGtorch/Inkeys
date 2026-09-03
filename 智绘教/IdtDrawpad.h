@@ -16,6 +16,7 @@ public:
 		dirty = false;
 		SetRectEmpty(&dirtyRect);
 		SetRectEmpty(&prevDirtyRect);
+		originX = originY = 0;
 	}
 	~StrokeImageClass()
 	{
@@ -35,6 +36,7 @@ public:
 	bool dirty;		// 脏矩形优化：画布内容是否有更新
 	RECT dirtyRect;	// 脏矩形优化：内容区域（屏幕像素坐标）
 	RECT prevDirtyRect;	// 脏矩形优化：已合成内容区域的并集（用于移除/收缩时重绘）
+	int originX, originY;	// 区域画布：画布左上角在屏幕中的坐标
 };
 extern StrokeImageClass strokeImage;
 
