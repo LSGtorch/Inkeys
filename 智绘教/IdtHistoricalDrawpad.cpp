@@ -285,6 +285,7 @@ void IdtRecall()
 			if (!RecallImage.empty()) RecallImage.pop_back();
 			deque<RecallStruct>(RecallImage).swap(RecallImage); // 使用swap技巧来释放未使用的内存
 			LockRecallImageSm.unlock();
+			EmptyWorkingSet(GetCurrentProcess()); // 释放快照后将内存还给系统
 		}
 	}
 

@@ -103,7 +103,8 @@ void idtLoadImage(IMAGE* pDstImg, LPCTSTR pResType, LPCTSTR pResName, int nWidth
 
 shared_mutex RecallImageSm;
 static atomic<unsigned long long> RecallTokenCounter = 0;
-static atomic<bool> recallCompressing = false;
+static atomic<int> recallCompressing = 0;		// 正在压缩的任务数（上限2）
+static atomic<bool> recallCompressQueued = false;	// 有待处理的压缩需求
 
 unsigned long long NextRecallToken()
 {
@@ -200,7 +201,7 @@ IMAGE GetRecallEntryImage(RecallStruct& entry)
 }
 void MaybeCompressRecallEntries()
 {
-	if (recallCompressing) return;
+	if (recallCompressing >= 2) { recallCompressQueued = true; return; }
 
 	unsigned long long targetToken = 0;
 	IMAGE snapshot;
@@ -218,24 +219,33 @@ void MaybeCompressRecallEntries()
 	}
 	if (targetToken == 0) return;
 
-	recallCompressing = true;
+	recallCompressing++;
 	thread([targetToken, snapshot]() mutable
 		{
 			vector<BYTE> png;
 			EncodeImageToPngMemory(&snapshot, png);
 
-			unique_lock lock(RecallImageSm);
-			for (auto& entry : RecallImage)
 			{
-				if (entry.token == targetToken && entry.png.empty() && !png.empty())
+				unique_lock lock(RecallImageSm);
+				for (auto& entry : RecallImage)
 				{
-					entry.png = std::move(png);
-					entry.img = IMAGE(); // 释放全屏位图
-					break;
+					if (entry.token == targetToken && entry.png.empty() && !png.empty())
+					{
+						entry.png = std::move(png);
+						entry.img = IMAGE(); // 释放全屏位图
+						break;
+					}
 				}
 			}
-			lock.unlock();
 
-			recallCompressing = false;
+			recallCompressing--;
+
+			// 把释放的内存还给系统，并继续排干积压条目
+			EmptyWorkingSet(GetCurrentProcess());
+			if (recallCompressQueued)
+			{
+				recallCompressQueued = false;
+				MaybeCompressRecallEntries();
+			}
 		}).detach();
 }

@@ -1724,6 +1724,8 @@ void DrawpadDrawing()
 
 				stateMode.StateModeSelectEcho = StateModeSelectEnum::IdtSelection;
 
+				EmptyWorkingSet(GetCurrentProcess()); // 集中释放后将内存还给系统
+
 				timeEndPeriod(1);
 
 				int ppt_switch_count = 0;
@@ -2296,8 +2298,8 @@ void DrawpadDrawing()
 			ulwi.prcDirty = NULL;
 		}
 
-		// 空闲时压缩撤销历史
-		if (siz == 0) MaybeCompressRecallEntries();
+		// 持续排干撤销历史压缩队列
+		MaybeCompressRecallEntries();
 
 		//帧率锁
 		{
