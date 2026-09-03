@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "IdtMain.h"
+#include "IdtImage.h"
 
 void removeEmptyFolders(std::wstring path);
 void removeUnknownFiles(std::wstring path, std::deque<std::wstring> knownFiles);
