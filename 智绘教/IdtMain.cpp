@@ -1132,7 +1132,8 @@ int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPWSTR
 		}
 
 	#ifdef IDT_RELEASE
-		thread(AutomaticUpdate).detach();
+		// 自动更新已按需求关闭：不启动更新检查线程（避免联网检查/静默下载）。
+		// thread(AutomaticUpdate).detach();
 	#endif
 	}
 

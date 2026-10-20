@@ -226,7 +226,7 @@ void FreezeFrameWindow()
 				//FocusPptShow();
 
 				{
-					double delay = 1000.0 / 24.0 - chrono::duration<double, std::milli>(chrono::high_resolution_clock::now() - tRecord).count();
+					double delay = 1000.0 / 60.0 - chrono::duration<double, std::milli>(chrono::high_resolution_clock::now() - tRecord).count();
 					if (delay >= 1.0) std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<long long>(delay)));
 				}
 			}

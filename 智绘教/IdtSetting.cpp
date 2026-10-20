@@ -945,7 +945,7 @@ void SettingMain()
 				ResetDevice();
 			}
 
-			hiex::DelayFPS(recond, 24);
+			hiex::DelayFPS(recond, 60);
 
 			// Start the Dear ImGui frame
 			ImGui_ImplDX9_NewFrame();
